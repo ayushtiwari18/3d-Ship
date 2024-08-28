@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>3D Titanic Dive - Deep Ocean Exploration</title>
+    <script
+      async
+      src="https://unpkg.com/es-module-shims@1.6.3/dist/es-module-shims.js"
+    ></script>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.155.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.155.0/examples/jsm/"
+        }
+      }
+    </script>
+    <style>
+      body {
+        margin: 0;
+        overflow: hidden;
+      }
+      canvas {
+        display: block;
+      }
+      #info {
+        position: absolute;
+        top: 10px;
+        left: 10px;
+        color: white;
+        font-family: Arial, sans-serif;
+        background-color: rgba(0, 0, 0, 0.5);
+        padding: 10px;
+        border-radius: 5px;
+      }
+      #explore-button {
+        position: absolute;
+        top: 10px;
+        right: 10px;
+        padding: 10px;
+        font-size: 16px;
+        cursor: pointer;
+      }
+      #mini-map {
+        position: absolute;
+        bottom: 10px;
+        right: 10px;
+        width: 200px;
+        height: 200px;
+        background-color: rgba(0, 0, 0, 0.5);
+        border-radius: 5px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="info">
+      Use Arrow keys to move, Space to descend, Tab to ascend<br />
+      Scroll to zoom, Mouse drag to rotate camera<br />
+      Press 'L' to toggle spotlight<br />
+      Depth: <span id="depth">0</span> m
+    </div>
+    <button id="explore-button">Explore</button>
+    <div id="mini-map"></div>
+    <script type="module">
+      import * as THREE from "three";
+      import { Water } from "three/addons/objects/Water.js";
+      import { Sky } from "three/addons/objects/Sky.js";
+      import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+
+      let scene, camera, renderer, water, sun, sky;
+      let submarine, titanicWreck, ship;
+      let marineLife = [];
+      let exploring = false;
+      let directionalLight, ambientLight, spotlight;
+      let velocity = new THREE.Vector3();
+      let clock = new THREE.Clock();
+
+      const loader = new GLTFLoader();
+
+      // Constants
+      const MAX_DEPTH = -3850;
+      const MIN_DEPTH = 0;
+      const DARK_DEPTH = -3500;
+      const DRAG_COEFFICIENT = 0.1;
+      const MAX_SPEED = 5;
+
+      function init() {
+        // Scene setup
+        scene = new THREE.Scene();
+        camera = new THREE.PerspectiveCamera(
+          75,
+          window.innerWidth / window.innerHeight,
+          0.1,
+          10000
+        );
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.debug.checkShaderErrors = true;
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.body.appendChild(renderer.domElement);
+
+        // Lighting
+        ambientLight = new THREE.AmbientLight(0x404040);
+        scene.add(ambientLight);
+
+        directionalLight = new THREE.DirectionalLight(0xffffff, 0.5);
+        directionalLight.position.set(1, 1, 1);
+        scene.add(directionalLight);
+
+        // Spotlight
+        spotlight = new THREE.SpotLight(0xffffff, 1);
+        spotlight.angle = Math.PI / 6;
+        spotlight.penumbra = 0.1;
+        spotlight.decay = 2;
+        spotlight.distance = 50;
+        spotlight.visible = false;
+
+        // Water
+        const waterGeometry = new THREE.PlaneGeometry(10000, 10000);
+        water = new Water(waterGeometry, {
+          textureWidth: 512,
+          textureHeight: 512,
+          waterNormals: new THREE.TextureLoader().load(
+            "textures/waternormals.jpg",
+            function (texture) {
+              texture.wrapS = texture.wrapT = THREE.RepeatWrapping;
+            }
+          ),
+          sunDirection: new THREE.Vector3(),
+          sunColor: 0xffffff,
+          waterColor: 0x001e0f,
+          distortionScale: 3.7,
+          fog: scene.fog !== undefined,
+        });
+        water.rotation.x = -Math.PI / 2;
+        scene.add(water);
+
+        // Sky
+        sky = new Sky();
+        sky.scale.setScalar(10000);
+        scene.add(sky);
+
+        const skyUniforms = sky.material.uniforms;
+        skyUniforms["turbidity"].value = 10;
+        skyUniforms["rayleigh"].value = 2;
+        skyUniforms["mieCoefficient"].value = 0.005;
+        skyUniforms["mieDirectionalG"].value = 0.8;
+
+        updateSun();
+
+        // Load models
+        loadShip();
+        loadSubmarine();
+        loadTitanicWreck();
+        addMarineLife();
+
+        // Event listeners
+        window.addEventListener("resize", onWindowResize, false);
+        document.addEventListener("keydown", onKeyDown, false);
+        document.addEventListener("keyup", onKeyUp, false);
+        document.addEventListener("mousedown", onMouseDown, false);
+        document.addEventListener("mouseup", onMouseUp, false);
+        document.addEventListener("mousemove", onMouseMove, false);
+        document.addEventListener("wheel", onMouseWheel, false);
+        document
+          .getElementById("explore-button")
+          .addEventListener("click", startExploration);
+
+        // Initial camera position
+        camera.position.set(0, 20, 100);
+        camera.lookAt(0, 0, 0);
+
+        // Fog
+        scene.fog = new THREE.FogExp2(0x001e0f, 0.0003);
+
+        // Start the render loop
+        animate();
+      }
+
+      // ... [All other functions remain the same] ...
+
+      function loadShip() {
+        loader.load("models/ship.glb", (gltf) => {
+          ship = gltf.scene;
+          ship.scale.set(5, 5, 5);
+          ship.position.set(0, 0, 0);
+          scene.add(ship);
+        });
+      }
+      function updateSun() {
+        const parameters = {
+          elevation: 2,
+          azimuth: 180,
+        };
+
+        const pmremGenerator = new THREE.PMREMGenerator(renderer);
+
+        const phi = THREE.MathUtils.degToRad(90 - parameters.elevation);
+        const theta = THREE.MathUtils.degToRad(parameters.azimuth);
+        sun = new THREE.Vector3();
+        sun.setFromSphericalCoords(1, phi, theta);
+
+        sky.material.uniforms["sunPosition"].value.copy(sun);
+        water.material.uniforms["sunDirection"].value.copy(sun).normalize();
+        scene.environment = pmremGenerator.fromScene(sky).texture;
+      }
+
+      function loadSubmarine() {
+        loader.load(
+          "models/submarine.glb",
+          function (gltf) {
+            submarine = gltf.scene;
+            submarine.scale.set(2, 2, 2);
+            submarine.position.set(0, 0, 0);
+            scene.add(submarine);
+            console.log("Submarine loaded and added to the scene:", submarine);
+          },
+          undefined,
+          function (error) {
+            console.error(
+              "An error happened while loading the submarine:",
+              error
+            );
+          }
+        );
+      }
+
+      function loadTitanicWreck() {
+        loader.load("models/titanic_wreck.glb", function (gltf) {
+          titanicWreck = gltf.scene;
+          titanicWreck.scale.set(20, 20, 20);
+          titanicWreck.position.set(0, MAX_DEPTH + 50, -500);
+          titanicWreck.rotation.y = Math.PI / 4;
+          scene.add(titanicWreck);
+        });
+      }
+
+      function addMarineLife() {
+        const fishGeometry = new THREE.SphereGeometry(1, 32, 32);
+        const fishMaterial = new THREE.MeshPhongMaterial({ color: 0x00ff00 });
+
+        for (let i = 0; i < 100; i++) {
+          const fish = new THREE.Mesh(fishGeometry, fishMaterial);
+          fish.position.set(
+            Math.random() * 1000 - 500,
+            Math.random() * (MIN_DEPTH - MAX_DEPTH) + MAX_DEPTH,
+            Math.random() * 1000 - 500
+          );
+          marineLife.push(fish);
+          scene.add(fish);
+        }
+      }
+
+      function onWindowResize() {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      }
+
+      function onKeyDown(event) {
+        if (!exploring) return;
+
+        switch (event.code) {
+          case "ArrowUp":
+          case "KeyW":
+            submarine.translateZ(-1);
+            break;
+          case "ArrowLeft":
+          case "KeyA":
+            submarine.translateX(-1);
+            break;
+          case "ArrowDown":
+          case "KeyS":
+            submarine.translateZ(1);
+            break;
+          case "ArrowRight":
+          case "KeyD":
+            submarine.translateX(1);
+            break;
+          case "Space":
+            submarine.translateY(-1);
+            break;
+          case "Tab":
+            event.preventDefault(); // Prevent default browser behavior for Tab key
+            submarine.translateY(1);
+            break;
+        }
+        updateDepthDisplay(); // Update depth display after movement
+      }
+
+      function updateDepthDisplay() {
+        const depthElement = document.getElementById("depth");
+        if (submarine) {
+          depthElement.textContent = Math.abs(Math.round(submarine.position.y));
+        }
+      }
+
+      function onKeyUp(event) {
+        if (!exploring) return;
+
+        switch (event.code) {
+          case "ArrowUp":
+          case "KeyW":
+            submarine.translateZ(-1);
+            break;
+          case "ArrowLeft":
+          case "KeyA":
+            submarine.translateX(-1);
+            break;
+          case "ArrowDown":
+          case "KeyS":
+            submarine.translateZ(1);
+            break;
+          case "ArrowRight":
+          case "KeyD":
+            submarine.translateX(1);
+            break;
+          case "Space":
+            submarine.translateY(-1);
+            break;
+          case "Tab":
+            event.preventDefault(); // Prevent default browser behavior for Tab key
+            submarine.translateY(1);
+            break;
+        }
+        updateDepthDisplay(); // Update depth display after movement
+        // Add necessary logic if movement needs to stop on key release
+      }
+
+      function onMouseDown(event) {
+        document.body.requestPointerLock();
+      }
+
+      function onMouseUp(event) {
+        document.exitPointerLock();
+      }
+
+      function onMouseMove(event) {
+        // Adjust camera orientation based on mouse movement
+        if (!exploring || document.pointerLockElement !== document.body) return;
+
+        const movementX = event.movementX || event.mozMovementX || 0;
+        const movementY = event.movementY || event.mozMovementY || 0;
+
+        camera.rotation.y -= movementX * 0.002;
+        camera.rotation.x -= movementY * 0.002;
+      }
+
+      function onMouseWheel(event) {
+        // Adjust camera zoom based on scroll
+        if (!exploring) return;
+        const zoomIntensity = 0.1;
+        camera.position.z += event.deltaY * zoomIntensity;
+      }
+
+      function startExploration() {
+        exploring = true;
+        document.getElementById("explore-button").style.display = "none";
+        animate();
+      }
+
+      function animate() {
+        requestAnimationFrame(animate);
+
+        const delta = clock.getDelta();
+
+        if (exploring && submarine) {
+          // Apply physics to submarine movement
+          velocity.multiplyScalar(1 - DRAG_COEFFICIENT);
+          submarine.position.add(velocity.clone().multiplyScalar(delta));
+
+          // Collision detection
+          const collisionObjects = [titanicWreck, ...marineLife];
+          for (const object of collisionObjects) {
+            if (submarine.position.distanceTo(object.position) < 5) {
+              // Simple collision response: move away from the object
+              const awayVector = submarine.position
+                .clone()
+                .sub(object.position)
+                .normalize();
+              submarine.position.add(awayVector);
+            }
+          }
+
+          // Depth limits
+          submarine.position.y = Math.max(
+            MAX_DEPTH,
+            Math.min(MIN_DEPTH, submarine.position.y)
+          );
+
+          // Update camera position relative to submarine
+          camera.position
+            .copy(submarine.position)
+            .add(new THREE.Vector3(0, 5, 20));
+          camera.lookAt(submarine.position);
+
+          // Update spotlight direction
+          if (spotlight.visible) {
+            spotlight.target.position
+              .copy(submarine.position)
+              .add(
+                submarine
+                  .getWorldDirection(new THREE.Vector3())
+                  .multiplyScalar(10)
+              );
+            spotlight.target.updateMatrixWorld();
+          }
+
+          // Dynamic lighting based on depth
+          const depthFactor = Math.max(
+            0,
+            Math.min(
+              1,
+              (submarine.position.y - DARK_DEPTH) / (MIN_DEPTH - DARK_DEPTH)
+            )
+          );
+          directionalLight.intensity = 0.5 * depthFactor;
+          ambientLight.intensity = 0.1 + 0.3 * depthFactor;
+
+          // Update fog density based on depth
+          scene.fog.density = 0.0003 + (1 - depthFactor) * 0.001;
+
+          // Animate marine life
+          for (const fish of marineLife) {
+            fish.position.add(fish.velocity);
+
+            // Boundary check and reverse direction if needed
+            if (
+              Math.abs(fish.position.x) > 500 ||
+              Math.abs(fish.position.y) > Math.abs(MAX_DEPTH) ||
+              Math.abs(fish.position.z) > 500
+            ) {
+              fish.velocity.multiplyScalar(-1);
+            }
+
+            // Avoid submarine
+            const distanceToSubmarine = fish.position.distanceTo(
+              submarine.position
+            );
+            if (distanceToSubmarine < 20) {
+              const awayVector = fish.position
+                .clone()
+                .sub(submarine.position)
+                .normalize();
+              fish.velocity.add(awayVector.multiplyScalar(0.1));
+            }
+
+            // Normalize velocity to maintain constant speed
+            fish.velocity.normalize().multiplyScalar(0.2);
+          }
+
+          updateDepthDisplay();
+          updateMiniMap();
+        }
+
+        // Update water
+        water.material.uniforms["time"].value += delta;
+
+        renderer.render(scene, camera);
+      }
+
+      init();
+    </script>
+  </body>
+</html>

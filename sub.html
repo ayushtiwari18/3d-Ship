@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>3D Titanic Dive - Ocean Life</title>
+    <style>
+        body { margin: 0; overflow: hidden; }
+        canvas { display: block; }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            font-family: Arial, sans-serif;
+            background-color: rgba(0, 0, 0, 0.5);
+            padding: 10px;
+            border-radius: 5px;
+        }
+    </style>
+</head>
+<body>
+    <div id="info">
+        Use Arrow keys to move, Space to descend, Tab to ascend<br>
+        Scroll to move up/down<br>
+        Depth: <span id="depth">0</span> m
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script>
+        let scene, camera, renderer, submarine;
+        let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false, moveUp = false, moveDown = false;
+        let marineLife = [];
+        let waterParticles;
+
+        const MAX_DEPTH = -3850;
+        const MIN_DEPTH = 50;
+
+        function init() {
+            scene = new THREE.Scene();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 10000);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+
+            // Set background color to a more realistic ocean blue
+            scene.background = new THREE.Color(0x0077be);
+
+            // Create ocean floor
+            const floorGeometry = new THREE.PlaneGeometry(10000, 10000);
+            const floorMaterial = new THREE.MeshPhongMaterial({ color: 0x006994, side: THREE.DoubleSide });
+            const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+            floor.rotation.x = -Math.PI / 2;
+            floor.position.y = MAX_DEPTH;
+            scene.add(floor);
+
+            // Create submarine
+            createSubmarine();
+
+            // Create Titanic wreck
+            createTitanicWreck();
+
+            // Add marine life
+            addMarineLife();
+
+            // Add water particles
+            addWaterParticles();
+
+            // Add fog for underwater effect
+            scene.fog = new THREE.FogExp2(0x0077be, 0.00075);
+
+            // Add ambient light
+            const ambientLight = new THREE.AmbientLight(0x404040, 0.5);
+            scene.add(ambientLight);
+
+            // Add directional light (simulating submarine's light)
+            const spotLight = new THREE.SpotLight(0xffffff, 1, 1000, Math.PI / 6, 0.5);
+            spotLight.position.set(0, 2, 5);
+            submarine.add(spotLight);
+            submarine.add(spotLight.target);
+
+            // Handle window resize
+            window.addEventListener('resize', onWindowResize, false);
+
+            // Handle keyboard controls
+            document.addEventListener('keydown', onKeyDown, false);
+            document.addEventListener('keyup', onKeyUp, false);
+
+            // Handle scroll to move submarine up and down
+            document.addEventListener('wheel', onScroll, false);
+
+            camera.position.set(0, 10, 10);
+            camera.lookAt(submarine.position);
+        }
+
+        function createSubmarine() {
+            const submarineGeometry = new THREE.CylinderGeometry(1, 1, 5, 16);
+            const submarineMaterial = new THREE.MeshPhongMaterial({ color: 0xffff00 });
+            submarine = new THREE.Mesh(submarineGeometry, submarineMaterial);
+            submarine.rotation.z = Math.PI / 2;
+            submarine.position.y = 0;
+            scene.add(submarine);
+
+            // Add viewport to submarine
+            const viewportGeometry = new THREE.SphereGeometry(0.5, 32, 32, 0, Math.PI * 2, 0, Math.PI / 2);
+            const viewportMaterial = new THREE.MeshPhongMaterial({ color: 0x87CEEB, transparent: true, opacity: 0.7 });
+            const viewport = new THREE.Mesh(viewportGeometry, viewportMaterial);
+            viewport.rotation.x = Math.PI / 2;
+            viewport.position.set(0, 0.5, 2);
+            submarine.add(viewport);
+        }
+
+        function createTitanicWreck() {
+            const shipLength = 200;
+            const shipWidth = 25;
+            const shipHeight = 35;
+
+            const hullGeometry = new THREE.BoxGeometry(shipLength, shipHeight, shipWidth);
+            const hullMaterial = new THREE.MeshPhongMaterial({ color: 0x8B4513 });
+            const titanic = new THREE.Mesh(hullGeometry, hullMaterial);
+            titanic.position.set(0, -3780, -100);
+            scene.add(titanic);
+
+            // Add some details to the wreck
+            const chimneyGeometry = new THREE.CylinderGeometry(5, 5, 20, 16);
+            const chimneyMaterial = new THREE.MeshPhongMaterial({ color: 0x333333 });
+            for (let i = 0; i < 4; i++) {
+                const chimney = new THREE.Mesh(chimneyGeometry, chimneyMaterial);
+                chimney.position.set(-60 + i * 40, 10, 0);
+                titanic.add(chimney);
+            }
+        }
+
+        function addMarineLife() {
+            const lifeforms = [
+                { geometry: new THREE.SphereGeometry(2), count: 500, yRange: [-3700, 0], color: 0x00ff00, speed: 0.2 }, // Fish
+                { geometry: new THREE.ConeGeometry(5, 20), count: 20, yRange: [-3000, -1000], color: 0x808080, speed: 0.5 }, // Sharks
+                { geometry: new THREE.SphereGeometry(10), count: 5, yRange: [-2000, -500], color: 0x0000ff, speed: 0.3 },  // Whales
+                { geometry: new THREE.TorusGeometry(2, 1, 16, 100), count: 200, yRange: [-3500, -100], color: 0xff69b4, speed: 0.1 } // Jellyfish
+            ];
+
+            lifeforms.forEach(life => {
+                for (let i = 0; i < life.count; i++) {
+                    const material = new THREE.MeshPhongMaterial({ color: life.color });
+                    const mesh = new THREE.Mesh(life.geometry, material);
+                    mesh.position.set(
+                        Math.random() * 2000 - 1000,
+                        Math.random() * (life.yRange[1] - life.yRange[0]) + life.yRange[0],
+                        Math.random() * 2000 - 1000
+                    );
+                    mesh.speed = life.speed;
+                    scene.add(mesh);
+                    marineLife.push(mesh);
+                }
+            });
+        }
+
+        function addWaterParticles() {
+            const particleGeometry = new THREE.BufferGeometry();
+            const particleCount = 10000;
+            const posArray = new Float32Array(particleCount * 3);
+
+            for (let i = 0; i < particleCount * 3; i++) {
+                posArray[i] = (Math.random() - 0.5) * 2000;
+            }
+
+            particleGeometry.setAttribute('position', new THREE.BufferAttribute(posArray, 3));
+            const particleMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 0.1 });
+            waterParticles = new THREE.Points(particleGeometry, particleMaterial);
+            scene.add(waterParticles);
+        }
+
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        function onKeyDown(event) {
+            switch (event.keyCode) {
+                case 38: // Arrow Up
+                    moveForward = true;
+                    break;
+                case 40: // Arrow Down
+                    moveBackward = true;
+                    break;
+                case 37: // Arrow Left
+                    moveLeft = true;
+                    break;
+                case 39: // Arrow Right
+                    moveRight = true;
+                    break;
+                case 32: // Space
+                    moveDown = true;
+                    break;
+                case 9: // Tab
+                    moveUp = true;
+                    break;
+            }
+        }
+
+        function onKeyUp(event) {
+            switch (event.keyCode) {
+                case 38: // Arrow Up
+                    moveForward = false;
+                    break;
+                case 40: // Arrow Down
+                    moveBackward = false;
+                    break;
+                case 37: // Arrow Left
+                    moveLeft = false;
+                    break;
+                case 39: // Arrow Right
+                    moveRight = false;
+                    break;
+                case 32: // Space
+                    moveDown = false;
+                    break;
+                case 9: // Tab
+                    moveUp = false;
+                    break;
+            }
+        }
+
+        function onScroll(event) {
+            const scrollSpeed = 0.1;
+            submarine.position.y += event.deltaY * scrollSpeed;
+
+            // Clamp depth
+            submarine.position.y = Math.max(Math.min(submarine.position.y, MIN_DEPTH), MAX_DEPTH);
+
+            // Update depth display
+            const depthElement = document.getElementById('depth');
+            depthElement.innerText = (-submarine.position.y).toFixed(2);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            if (moveForward) submarine.position.z -= 1;
+            if (moveBackward) submarine.position.z += 1;
+            if (moveLeft) submarine.position.x -= 1;
+            if (moveRight) submarine.position.x += 1;
+            if (moveUp) submarine.position.y += 1;
+            if (moveDown) submarine.position.y -= 1;
+
+            // Clamp depth
+            submarine.position.y = Math.max(Math.min(submarine.position.y, MIN_DEPTH), MAX_DEPTH);
+
+            camera.position.set(submarine.position.x, submarine.position.y + 10, submarine.position.z + 10);
+            camera.lookAt(submarine.position);
+
+            waterParticles.position.y = submarine.position.y;
+
+            // Move marine life
+            marineLife.forEach(life => {
+                life.position.x += (Math.random() - 0.5) * life.speed;
+                life.position.y += (Math.random() - 0.5) * life.speed;
+                life.position.z += (Math.random() - 0.5) * life.speed;
+            });
+
+            renderer.render(scene, camera);
+        }
+
+        init();
+        animate();
+    </script>
+</body>
+</html>
